@@ -4,7 +4,12 @@ import io
 import os
 import math
 import requests
-import re
+import reportlab.rl_config
+
+# --- 1. CRITICAL CONFIG FOR JODAKSHAR (Must be before other imports) ---
+# આ લાઈન જોડાક્ષરો (Complex Script) ને ભેગા કરે છે
+reportlab.rl_config.shaped_text = 'uharfbuzz'
+
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -16,21 +21,12 @@ from pypdf import PdfReader, PdfWriter
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-import reportlab.rl_config
-
-# --- TEXT SHAPING SETUP (Jodakshar Fix) ---
-# આ સેટીંગ જોડાક્ષરને તૂટતા અટકાવશે (જો uharfbuzz ઇન્સ્ટોલ હશે તો)
-try:
-    reportlab.rl_config.shaped_text = 'uharfbuzz'
-except:
-    pass
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Murlidhar Academy PDF Tool", page_icon="📝", layout="wide")
 
 # --- HELPER FUNCTIONS ---
 def get_drive_direct_url(view_url):
-    """Converts Google Drive View URL to Direct Download URL"""
     try:
         if '/d/' in view_url:
             file_id = view_url.split('/d/')[1].split('/')[0]
@@ -39,12 +35,10 @@ def get_drive_direct_url(view_url):
         return view_url
     return view_url
 
-# --- MIXED FONT LOGIC (English -> Helvetica, Gujarati -> GujFont) ---
+# --- MIXED FONT LOGIC ---
 def stylize_text(text):
     """
-    આ ફંક્શન વાક્યના દરેક શબ્દને ચેક કરે છે.
-    જો શબ્દમાં ગુજરાતી અક્ષર હોય તો તેને <font face='GujFont'> માં મૂકે છે.
-    બાકીના અંગ્રેજી શબ્દો ડિફોલ્ટ Helvetica માં રહે છે.
+    અંગ્રેજી શબ્દો માટે English Font અને ગુજરાતી માટે Gujarati Font વાપરે છે.
     """
     if not isinstance(text, str):
         return str(text)
@@ -53,39 +47,41 @@ def stylize_text(text):
     styled_words = []
     
     for word in words:
-        # Check if word contains non-ascii characters (Gujarati)
+        # Check if word contains Gujarati characters
         is_gujarati = any(ord(char) > 127 for char in word)
         
         if is_gujarati:
+            # Gujarati Font
             styled_words.append(f"<font face='GujFont'>{word}</font>")
         else:
-            # English stays in default font (Helvetica defined in style)
+            # English Font (Helvetica renders cleaner for English numbers/text)
             styled_words.append(f"<font face='Helvetica'>{word}</font>")
             
     return " ".join(styled_words)
 
-# --- LOAD FONTS ---
+# --- LOAD FONTS (Noto Sans Gujarati - BEST FOR JODAKSHAR) ---
 @st.cache_resource
 def load_custom_fonts():
-    # User Provided Font Link (HindVadodara - Better for Jodakshars)
-    font_drive_url = "https://drive.google.com/file/d/1jVDKtad01ecE6dwitiAlrqR5Ov1YsJzw/view?usp=sharing"
-    font_path = "GujaratiFont.ttf"
+    # Noto Sans Gujarati (Bold) - Google Fonts Direct Link
+    # આ ફોન્ટમાં જોડાક્ષરોનું કોડિંગ સૌથી સારું હોય છે
+    font_url = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansGujarati/NotoSansGujarati-Bold.ttf"
+    font_path = "NotoSansGujarati-Bold.ttf"
     
     if not os.path.exists(font_path):
         try:
-            download_url = get_drive_direct_url(font_drive_url)
-            response = requests.get(download_url)
+            response = requests.get(font_url)
             if response.status_code == 200:
                 with open(font_path, "wb") as f:
                     f.write(response.content)
             else:
-                st.error("❌ Failed to download Font.")
+                st.error("❌ Failed to download Noto Sans Font.")
                 return False
         except Exception as e:
             st.error(f"⚠️ Font error: {e}")
             return False
             
     try:
+        # Font Register with 'uharfbuzz' awareness implicitly via Config
         pdfmetrics.registerFont(TTFont('GujFont', font_path))
         return True
     except Exception as e:
@@ -103,7 +99,7 @@ st.sidebar.divider()
 st.sidebar.info("Designed by Harsh Solanki")
 
 # --- MAIN UI ---
-st.title("📝 Answer Key & Solution Generator")
+st.title("📝 Answer Key & Solution Generator (Fixed Jodakshar)")
 st.markdown("તમારું **Question Paper PDF** અને **Answer Key CSV** અપલોડ કરો.")
 
 col1, col2, col3 = st.columns(3)
@@ -124,7 +120,7 @@ if add_solution:
     solution_text = st.text_area(
         "Paste Data Here:", 
         height=200,
-        placeholder="1 | A - પાટણ | પાટણ રાણકી વાવ માટે પ્રખ્યાત છે.\n2 | B - Girnar | ગિરનાર જૂનાગઢમાં આવેલો છે."
+        placeholder="1 | A - પાટણ | પાટણ રાણકી વાવ માટે પ્રખ્યાત છે.\n2 | B - કૌશલ્ય | જીવનનિર્વાહનો ખર્ચ વધુ હોય છે."
     )
 
 # --- BACKEND LOGIC ---
@@ -210,9 +206,8 @@ if st.button("Generate PDF 🚀"):
                     for col_idx in range(num_cols_needed):
                         q_num = col_idx * QUESTIONS_PER_COLUMN + (r + 1)
                         if q_num <= total_questions:
-                            # Apply font mixing logic to the Answer Key too
                             ans_val = answers.get(q_num, "-")
-                            # Convert to Paragraph for mixed fonts
+                            # Use stylize_text
                             p_style = ParagraphStyle('KeyStyle', fontName='Helvetica', fontSize=10, alignment=1)
                             styled_ans = Paragraph(stylize_text(ans_val), p_style)
                             
@@ -248,7 +243,7 @@ if st.button("Generate PDF 🚀"):
                 # === PAGE 2+: DETAILED SOLUTIONS ===
                 if add_solution and solution_text.strip():
                     styles = getSampleStyleSheet()
-                    # Base style is Helvetica (for English)
+                    # Base style
                     base_style = ParagraphStyle(
                         'MixedStyle',
                         parent=styles['Normal'],
@@ -269,7 +264,6 @@ if st.button("Generate PDF 🚀"):
                             ans_txt = parts[1].strip() if len(parts) > 1 else ""
                             expl_txt = parts[2].strip() if len(parts) > 2 else ""
                             
-                            # Use stylize_text to apply Gujarati font ONLY to Gujarati words
                             row = [
                                 Paragraph(stylize_text(no_txt), base_style),
                                 Paragraph(stylize_text(ans_txt), base_style),
