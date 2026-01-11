@@ -9,9 +9,12 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import mm
 from reportlab.lib.colors import HexColor
-from reportlab.platypus import Table, TableStyle
+from reportlab.platypus import Table, TableStyle, Paragraph
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from pypdf import PdfReader, PdfWriter
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Murlidhar Academy PDF Tool", page_icon="📝", layout="wide")
@@ -19,8 +22,43 @@ st.set_page_config(page_title="Murlidhar Academy PDF Tool", page_icon="📝", la
 # --- HELPER: GOOGLE DRIVE DIRECT DOWNLOAD ---
 def get_drive_direct_url(view_url):
     """Converts Google Drive View URL to Direct Download URL"""
-    file_id = view_url.split('/d/')[1].split('/')[0]
-    return f"https://drive.google.com/uc?export=download&id={file_id}"
+    try:
+        file_id = view_url.split('/d/')[1].split('/')[0]
+        return f"https://drive.google.com/uc?export=download&id={file_id}"
+    except:
+        return view_url
+
+# --- 1. LOAD CUSTOM GUJARATI FONT FROM DRIVE ---
+@st.cache_resource
+def load_custom_fonts():
+    # User Provided Font Link (HindVadodara)
+    font_drive_url = "https://drive.google.com/file/d/1jVDKtad01ecE6dwitiAlrqR5Ov1YsJzw/view?usp=sharing"
+    font_path = "GujaratiFont.ttf"
+    
+    if not os.path.exists(font_path):
+        try:
+            download_url = get_drive_direct_url(font_drive_url)
+            response = requests.get(download_url)
+            if response.status_code == 200:
+                with open(font_path, "wb") as f:
+                    f.write(response.content)
+            else:
+                st.error("❌ Failed to download Font from Google Drive.")
+                return False
+        except Exception as e:
+            st.error(f"⚠️ Font error: {e}")
+            return False
+            
+    # Register the Font
+    try:
+        pdfmetrics.registerFont(TTFont('GujFont', font_path))
+        return True
+    except Exception as e:
+        st.error(f"❌ Font registration failed: {e}")
+        return False
+
+# Load fonts on startup
+fonts_loaded = load_custom_fonts()
 
 # --- SIDEBAR SETTINGS ---
 st.sidebar.title("⚙️ સેટિંગ્સ")
@@ -31,7 +69,7 @@ st.sidebar.divider()
 st.sidebar.info("Designed by Harsh Solanki")
 
 # --- MAIN UI ---
-st.title("📝 Answer Key Generator - Murlidhar Academy")
+st.title("📝 Answer Key & Solution Generator (Gujarati Support)")
 st.markdown("તમારું **Question Paper PDF** અને **Answer Key CSV** અપલોડ કરો.")
 
 col1, col2, col3 = st.columns(3)
@@ -42,16 +80,27 @@ with col2:
 with col3:
     img_file_upload = st.file_uploader("3. Background (Optional)", type=['png', 'jpg', 'jpeg'])
 
-# --- LOGIC: HANDLE BACKGROUND IMAGE ---
-# Default Google Drive Image Link
-DEFAULT_BG_URL = "https://drive.google.com/file/d/1NUwoSCN2OIWgjPQMPX1VileweKzta_HW/view?usp=sharing"
+# --- DETAILED SOLUTION SECTION ---
+st.divider()
+st.subheader("📘 Detailed Solutions (સમજૂતી)")
+add_solution = st.checkbox("Add Detailed Solutions Page? (વિસ્તૃત સમજૂતી ઉમેરવી છે?)")
 
+solution_text = ""
+if add_solution:
+    st.info("ℹ️ Format: **No | Answer | Explanation** (તમે ગુજરાતીમાં લખી શકો છો)")
+    solution_text = st.text_area(
+        "Paste Data Here:", 
+        height=200,
+        placeholder="1 | A - પાટણ | પાટણ રાણકી વાવ માટે પ્રખ્યાત છે.\n2 | B - ગિરનાર | ગિરનાર જૂનાગઢમાં આવેલો છે."
+    )
+
+# --- LOGIC: HANDLE BACKGROUND IMAGE ---
+DEFAULT_BG_URL = "https://drive.google.com/file/d/1NUwoSCN2OIWgjPQMPX1VileweKzta_HW/view?usp=sharing"
 bg_image_data = None
 
 if img_file_upload:
     bg_image_data = img_file_upload
 else:
-    # Use Default Image from Google Drive
     try:
         direct_url = get_drive_direct_url(DEFAULT_BG_URL)
         response = requests.get(direct_url)
@@ -65,20 +114,18 @@ else:
 
 # --- PROCESSING ---
 if st.button("Generate PDF 🚀"):
-    if pdf_file and csv_file and bg_image_data:
+    if pdf_file and csv_file and bg_image_data and fonts_loaded:
         try:
             with st.spinner("Processing... Please wait"):
                 # 1. READ CSV
                 df = pd.read_csv(csv_file)
                 key_cols = [c for c in df.columns if c.lower().startswith('key') and c[3:].isdigit()]
                 key_cols.sort(key=lambda x: int(x[3:]))
-
                 answers = {}
                 if not df.empty:
                     for k in key_cols:
                         q_num = int(k.lower().replace('key', ''))
                         answers[q_num] = str(df.iloc[0][k]).strip()
-                
                 total_questions = len(answers)
                 
                 # 2. CREATE WATERMARK
@@ -87,11 +134,10 @@ if st.button("Generate PDF 🚀"):
                 page1 = reader_temp.pages[0]
                 width = float(page1.mediabox.width)
                 height = float(page1.mediabox.height)
-                
                 c_wm = canvas.Canvas(packet_wm, pagesize=(width, height))
                 c_wm.setFillColor(colors.grey, alpha=0.15)
-                # Standard Font
-                c_wm.setFont("Helvetica-Bold", 60) 
+                # Use Gujarati Font for Watermark too (or keep Helvetica if english)
+                c_wm.setFont("GujFont", 60) 
                 c_wm.saveState()
                 c_wm.translate(width/2, height/2)
                 c_wm.rotate(45)
@@ -102,32 +148,30 @@ if st.button("Generate PDF 🚀"):
                 watermark_reader = PdfReader(packet_wm)
                 watermark_page = watermark_reader.pages[0]
 
-                # 3. CREATE ANSWER KEY PAGE
+                # --- 3. GENERATE PAGES ---
                 packet_key = io.BytesIO()
                 PAGE_W, PAGE_H = A4
                 c = canvas.Canvas(packet_key, pagesize=A4)
                 
-                # Draw Background
-                image_reader = ImageReader(bg_image_data)
-                c.drawImage(image_reader, 0, 0, width=PAGE_W, height=PAGE_H)
+                def draw_page_template(canvas_obj):
+                    image_reader = ImageReader(bg_image_data)
+                    canvas_obj.drawImage(image_reader, 0, 0, width=PAGE_W, height=PAGE_H)
+                    # Links
+                    TG_LINK_POS = (10*mm, 5*mm, 110*mm, 50*mm)
+                    IG_LINK_POS = (110*mm, 5*mm, 210*mm, 50*mm)
+                    canvas_obj.linkURL(TG_LINK, TG_LINK_POS)
+                    canvas_obj.linkURL(IG_LINK, IG_LINK_POS)
+
+                # === PAGE 1: ANSWER KEY ===
+                draw_page_template(c)
                 
-                # Title
-                c.setFont("Helvetica-Bold", 16) # Standard Font
+                c.setFont("GujFont", 16) # Title in Gujarati Font
                 c.setFillColor(colors.white)
                 file_name_clean = os.path.splitext(pdf_file.name)[0].replace("_", " ")
-                full_title = f"{file_name_clean} | ANSWER KEY"
-                
-                # Layout Config
-                TITLE_Y_mm_from_top = 63.5
-                TABLE_SPACE_AFTER_TITLE_mm = 10
-                LEFT_MARGIN_mm = 25
-                RIGHT_MARGIN_mm = 25
+                c.drawCentredString(PAGE_W/2, PAGE_H - (63.5 * mm), f"{file_name_clean} | ANSWER KEY")
+
+                # Table Logic
                 QUESTIONS_PER_COLUMN = 25
-                
-                title_y = PAGE_H - (TITLE_Y_mm_from_top * mm)
-                c.drawCentredString(PAGE_W/2, title_y, full_title)
-                
-                # Table Data
                 num_cols_needed = math.ceil(total_questions / QUESTIONS_PER_COLUMN)
                 table_data = []
                 headers = []
@@ -145,53 +189,121 @@ if st.button("Generate PDF 🚀"):
                             row.extend(["", ""])
                     table_data.append(row)
 
-                available_width = PAGE_W - (LEFT_MARGIN_mm * mm) - (RIGHT_MARGIN_mm * mm)
-                single_col_width = available_width / (num_cols_needed * 2)
-
-                t = Table(table_data, colWidths=[single_col_width] * (num_cols_needed * 2))
-
-                # Table Style (Using Standard Fonts)
-                HEADER_BG_COLOR = "#003366"
-                NO_COL_BG_COLOR = "#e0e0e0"
+                avail_w = PAGE_W - (50 * mm)
+                col_w = avail_w / (num_cols_needed * 2)
+                t = Table(table_data, colWidths=[col_w] * (num_cols_needed * 2))
                 
+                # Table Style using Gujarati Font
                 style = TableStyle([
-                    ('BACKGROUND', (0,0), (-1,0), HexColor(HEADER_BG_COLOR)),
+                    ('BACKGROUND', (0,0), (-1,0), HexColor("#003366")),
                     ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-                    ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'), # Standard Font
+                    ('FONTNAME', (0,0), (-1,0), 'GujFont'), # HEADER FONT
                     ('FONTSIZE', (0,0), (-1,0), 10),
                     ('ALIGN', (0,0), (-1,-1), 'CENTER'),
                     ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
                     ('GRID', (0,0), (-1,-1), 0.5, HexColor("#cccccc")),
                     ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, HexColor("#f9f9f9")]),
                 ])
-
+                
                 for i in range(num_cols_needed):
                     col_idx_no = i * 2
-                    col_idx_ans = i * 2 + 1
-                    style.add('FONTNAME', (col_idx_no, 1), (col_idx_no, -1), 'Helvetica-Bold')
-                    style.add('BACKGROUND', (col_idx_no, 1), (col_idx_no, -1), HexColor(NO_COL_BG_COLOR))
+                    style.add('FONTNAME', (col_idx_no, 1), (col_idx_no, -1), 'GujFont')
+                    style.add('BACKGROUND', (col_idx_no, 1), (col_idx_no, -1), HexColor("#e0e0e0"))
                     style.add('TEXTCOLOR', (col_idx_no, 1), (col_idx_no, -1), colors.black)
-                    style.add('FONTNAME', (col_idx_ans, 1), (col_idx_ans, -1), 'Helvetica')
 
                 t.setStyle(style)
                 w, h = t.wrapOn(c, PAGE_W, PAGE_H)
-                table_y = title_y - (TABLE_SPACE_AFTER_TITLE_mm * mm) - h
-                t.drawOn(c, (PAGE_W - w)/2, table_y)
-
-                # Links
-                TG_LINK_POS_mm = (10, 5, 110, 50)
-                IG_LINK_POS_mm = (110, 5, 210, 50)
-                def get_rect(pos_tuple):
-                    return (pos_tuple[0]*mm, pos_tuple[1]*mm, pos_tuple[2]*mm, pos_tuple[3]*mm)
-                
-                c.linkURL(TG_LINK, get_rect(TG_LINK_POS_mm))
-                c.linkURL(IG_LINK, get_rect(IG_LINK_POS_mm))
+                t.drawOn(c, (PAGE_W - w)/2, PAGE_H - (63.5 * mm) - 10*mm - h)
                 
                 c.showPage()
+
+                # === PAGE 2+: DETAILED SOLUTIONS ===
+                if add_solution and solution_text.strip():
+                    
+                    # Style for Gujarati Text Wrapping
+                    styles = getSampleStyleSheet()
+                    # We create a style that uses our Gujarati Font
+                    gu_style = ParagraphStyle(
+                        'GujaratiStyle',
+                        parent=styles['Normal'],
+                        fontName='GujFont', # IMPORTANT
+                        fontSize=10,
+                        leading=14,
+                        alignment=0
+                    )
+
+                    sol_headers = ["NO", "ANSWER", "EXPLANATION / SAMJUTI"]
+                    
+                    sol_data = []
+                    lines = solution_text.strip().split('\n')
+                    for line in lines:
+                        parts = line.split('|')
+                        if len(parts) >= 1:
+                            no_txt = parts[0].strip()
+                            ans_txt = parts[1].strip() if len(parts) > 1 else ""
+                            expl_txt = parts[2].strip() if len(parts) > 2 else ""
+                            
+                            # Wrap text in Paragraph with Gujarati Style
+                            row = [
+                                Paragraph(no_txt, gu_style),
+                                Paragraph(ans_txt, gu_style),
+                                Paragraph(expl_txt, gu_style)
+                            ]
+                            sol_data.append(row)
+
+                    col_widths = [20*mm, 50*mm, 110*mm]
+                    x_start = (PAGE_W - sum(col_widths)) / 2
+                    y_start = PAGE_H - (63.5 * mm) - 10*mm
+                    bottom_margin = 60 * mm
+                    
+                    # Start Logic
+                    draw_page_template(c)
+                    c.setFont("GujFont", 16)
+                    c.setFillColor(colors.white)
+                    c.drawCentredString(PAGE_W/2, PAGE_H - (63.5 * mm), "DETAILED SOLUTIONS")
+                    
+                    # Header
+                    header_t = Table([sol_headers], colWidths=col_widths)
+                    header_t.setStyle(TableStyle([
+                        ('BACKGROUND', (0,0), (-1,0), HexColor("#003366")),
+                        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+                        ('FONTNAME', (0,0), (-1,0), 'GujFont'),
+                        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                    ]))
+                    w_h, h_h = header_t.wrapOn(c, PAGE_W, PAGE_H)
+                    header_t.drawOn(c, x_start, y_start - h_h)
+                    
+                    current_y = y_start - h_h
+                    
+                    for row in sol_data:
+                        row_t = Table([row], colWidths=col_widths)
+                        row_t.setStyle(TableStyle([
+                            ('GRID', (0,0), (-1,-1), 0.5, HexColor("#cccccc")),
+                            ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                            ('BACKGROUND', (0,0), (0,-1), HexColor("#e0e0e0")),
+                        ]))
+                        
+                        w_r, h_r = row_t.wrapOn(c, PAGE_W, PAGE_H)
+                        
+                        if current_y - h_r < bottom_margin:
+                            c.showPage()
+                            draw_page_template(c)
+                            c.setFont("GujFont", 16)
+                            c.setFillColor(colors.white)
+                            c.drawCentredString(PAGE_W/2, PAGE_H - (63.5 * mm), "DETAILED SOLUTIONS")
+                            header_t.drawOn(c, x_start, y_start - h_h)
+                            current_y = y_start - h_h
+                        
+                        row_t.drawOn(c, x_start, current_y - h_r)
+                        current_y -= h_r
+
+                    c.showPage()
+
                 c.save()
                 packet_key.seek(0)
                 
-                # 4. MERGE PDFS
+                # 4. MERGE
                 reader_main = PdfReader(pdf_file)
                 reader_key = PdfReader(packet_key)
                 writer = PdfWriter()
@@ -200,7 +312,8 @@ if st.button("Generate PDF 🚀"):
                     page.merge_page(watermark_page)
                     writer.add_page(page)
                 
-                writer.add_page(reader_key.pages[0])
+                for page in reader_key.pages:
+                    writer.add_page(page)
                 
                 output_buffer = io.BytesIO()
                 writer.write(output_buffer)
@@ -208,11 +321,14 @@ if st.button("Generate PDF 🚀"):
                 st.download_button(
                     label="Download PDF 📥",
                     data=output_buffer.getvalue(),
-                    file_name=f"{os.path.splitext(pdf_file.name)[0]}_WITH_KEY.pdf",
+                    file_name=f"{os.path.splitext(pdf_file.name)[0]}_WITH_SOLUTION.pdf",
                     mime="application/pdf"
                 )
 
         except Exception as e:
             st.error(f"Error occurred: {e}")
     else:
-        st.warning("⚠️ Please upload PDF and CSV.")
+        if not fonts_loaded:
+            st.error("⚠️ Font download failed. Check link.")
+        else:
+            st.warning("⚠️ Please upload PDF and CSV.")
