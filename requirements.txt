@@ -3,3 +3,5 @@ pandas
 reportlab
 pypdf
 requests
+uharfbuzz
+freetype-py
